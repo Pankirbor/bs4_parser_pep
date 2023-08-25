@@ -1,5 +1,6 @@
 import re
 import logging
+from collections import defaultdict
 from urllib.parse import urljoin
 
 import requests_cache
@@ -7,12 +8,15 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
-from constants import BASE_DIR, MAIN_DOC_URL
+from constants import BASE_DIR, MAIN_DOC_URL, MAIN_PEPS_URL
 from outputs import control_output
-from utils import get_response, find_tag
+from utils import get_response, find_tag, status_mismatch
 
 
 def whats_new(session):
+    """Функция для парсинга страницы документации
+    с последними обновлениями."""
+
     whats_new_url = urljoin(MAIN_DOC_URL, "whatsnew/")
 
     response = get_response(session, whats_new_url)
@@ -21,19 +25,17 @@ def whats_new(session):
 
     soup = BeautifulSoup(response.text, "lxml")
 
-    # * поиск тега section с нужным id, получим список всех статей
     main_div = find_tag(soup, "section", attrs={"id": "what-s-new-in-python"})
-
-    # Шаг 2-й: поиск внутри main_div следующего тега div с классом toctree-wrapper.
-    # Здесь тоже нужен только первый элемент, используется метод find().
     div_with_ul = find_tag(main_div, "div", attrs={"class": "toctree-wrapper"})
+    sections_by_python = div_with_ul.find_all(
+        "li",
+        attrs={"class": "toctree-l1"},
+    )
 
-    # Шаг 3-й: поиск внутри div_with_ul всех элементов списка li с классом toctree-l1.
-    # Нужны все теги, поэтому используется метод find_all().
-    sections_by_python = div_with_ul.find_all("li", attrs={"class": "toctree-l1"})
+    results = [
+        ("Ссылка на статью", "Заголовок", "Редактор, Автор"),
+    ]
 
-    results = [("Ссылка на статью", "Заголовок", "Редактор, автор")]
-    # Печать первого найденного элемента.
     for section in tqdm(sections_by_python):
         version_a_tag = find_tag(section, "a")
         href = version_a_tag["href"]
@@ -43,21 +45,19 @@ def whats_new(session):
         if response_version is None:
             continue
 
-        # Загрузите все страницы со статьями. Используйте кеширующую сессию.
-        soup_version = BeautifulSoup(response_version.text, "lxml")  # Сварите "супчик".
-        h1 = find_tag(soup_version, "h1")  # Найдите в "супе" тег h1.
-        dl2 = find_tag(soup_version, "dl")  # Найдите в "супе" тег dl.
+        soup_version = BeautifulSoup(response_version.text, "lxml")
+        h1 = find_tag(soup_version, "h1")
+        dl2 = find_tag(soup_version, "dl")
         name_author = dl2.text.replace("\n", " ")
         results.append((version_link, h1.text, name_author))
 
-    # # Печать списка с данными.
-    # for row in results:
-    #     # Распаковка каждого кортежа при печати при помощи звездочки.
-    #     print(*row)
     return results
 
 
 def latest_versions(session):
+    """Функция для получения таблицы с ссылками на
+    все доступные документации Python.
+    """
     response = get_response(session, MAIN_DOC_URL)
     if response is None:
         return
@@ -66,19 +66,17 @@ def latest_versions(session):
     sidebar = find_tag(soup, "div", attrs={"class": "sphinxsidebarwrapper"})
     ul_tags = sidebar.find_all("ul")
     for ul in ul_tags:
-        # Проверка, есть ли искомый текст в содержимом тега.
         if "All versions" in ul.text:
-            # Если текст найден, ищутся все теги <a> в этом списке.
             a_tags = ul.find_all("a")
-            # Остановка перебора списков.
             break
-    # Если нужный список не нашёлся,
-    # вызывается исключение и выполнение программы прерывается.
+
     else:
         raise Exception("Ничего не нашлось")
 
     pattern = r"Python (?P<version>\d\.\d+) \((?P<status>.*)\)"
-    result = [("Ссылка на документацию", "Версия", "Статус")]
+    result = [
+        ("Ссылка на документацию", "Версия", "Статус"),
+    ]
     for a_tag in a_tags:
         link = a_tag["href"]
         comp = re.search(pattern, a_tag.text)
@@ -88,13 +86,12 @@ def latest_versions(session):
             version, status = a_tag.text, ""
         result.append((link, version, status))
 
-    # for row in result:
-    #     print(*row)
     return result
 
 
 def download(session):
-    # Вместо константы DOWNLOADS_URL, используйте переменную downloads_url.
+    """Функция для загрузки файла с документацией Python."""
+
     downloads_url = urljoin(MAIN_DOC_URL, "download.html")
 
     response = get_response(session, downloads_url)
@@ -109,57 +106,88 @@ def download(session):
     filename = archive_url.split("/")[-1]
 
     downloads_dir = BASE_DIR / "downloads"
-
-    # Создайте директорию.
     downloads_dir.mkdir(exist_ok=True)
-
-    # Получите путь до архива, объединив имя файла с директорией.
     archive_path = downloads_dir / filename
-    # Загрузка архива по ссылке.
+
     response_dowanload = get_response(session, archive_url)
     if response_dowanload is None:
         return
 
-    # В бинарном режиме открывается файл на запись по указанному пути.
     with open(archive_path, "wb") as file:
-        # Полученный ответ записывается в файл.
         file.write(response_dowanload.content)
 
     logging.info(f"Архив был загружен и сохранён: {archive_path}")
+
+
+def pep(session):
+    """Функция парсинга всех разделов PEP для подсчета
+    общего количества документов и различных статусов."""
+
+    response = get_response(session, MAIN_PEPS_URL)
+    if response is None:
+        return
+
+    soup = BeautifulSoup(response.text, "lxml")
+    table_index = find_tag(soup, "section", {"id": "numerical-index"})
+
+    table_body = find_tag(table_index, "tbody")
+    table_rows = table_body.find_all("tr")
+    rows_status = [find_tag(row, "abbr").text[1:] for row in table_rows]
+    peps_href = [find_tag(row, "a")["href"] for row in table_rows]
+
+    count_status = defaultdict(int)
+
+    for status, href in zip(rows_status, peps_href):
+        link_pep = urljoin(MAIN_PEPS_URL, href)
+
+        response_card = get_response(session, link_pep)
+        if response_card is None:
+            logging.info(f"Ссылка на {link_pep} вернула None")
+            continue
+
+        soup_card = BeautifulSoup(response_card.text, "lxml")
+        pep_card = find_tag(soup_card, "dl")
+
+        status_row_sibling = pep_card.select('dt:-soup-contains("Status")')[0]
+        status_current_card = status_row_sibling.find_next_sibling("dd").text
+
+        # проверяем соответствие статусов
+        status_mismatch(status_current_card, status, link_pep)
+
+        count_status[status_current_card] += 1
+
+    result = [("Status", "Count")] + list(count_status.items())
+    result.append(("Total", sum(count_status.values())))
+    return result
 
 
 MODE_TO_FUNCTION = {
     "whats-new": whats_new,
     "latest-versions": latest_versions,
     "download": download,
+    "pep": pep,
 }
 
 
 def main():
-    # * Запускаем функцию с конфигурацией логов.
+    """Основная функция для работы с парсером в различных режимах."""
     configure_logging()
 
     logging.info("Парсер запущен!")
-    # Конфигурация парсера аргументов командной строки —
-    # передача в функцию допустимых вариантов выбора.
     arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
-    # Считывание аргументов из командной строки.
     args = arg_parser.parse_args()
 
     logging.info(f"Аргументы командной строки: {args}")
 
     session = requests_cache.CachedSession()
 
-    # Если был передан ключ '--clear-cache', то args.clear_cache == True.
     if args.clear_cache:
         session.cache.clear()
 
     parser_mode = args.mode
-    # Поиск и вызов нужной функции по ключу словаря.
     results = MODE_TO_FUNCTION[parser_mode](session)
 
     if results is not None:
-        # передаём их в функцию вывода вместе с аргументами командной строки.
         control_output(results, args)
 
     logging.info("Парсер завершил работу.")
