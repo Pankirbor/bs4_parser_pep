@@ -46,4 +46,4 @@ python3 main.py pep --output file
 ```
 
 ### Автор:
-- Панов Кирилл [https://github.com/Pankirbor/]
+- [Панов Кирилл](https://github.com/Pankirbor/)
