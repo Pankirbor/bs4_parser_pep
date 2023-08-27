@@ -1,6 +1,7 @@
 import logging
-
 from requests import RequestException
+
+from bs4 import BeautifulSoup
 
 from constants import EXPECTED_STATUS
 from exceptions import ParserFindTagException
@@ -12,12 +13,24 @@ def get_response(session, url):
     try:
         response = session.get(url)
         response.encoding = "utf-8"
+
         return response
+
     except RequestException:
         logging.exception(
             f"Ошибка ответа на запрос {url}",
             stack_info=True,
         )
+
+
+def get_soup(session, url):
+    """Функция получения результатов работы BeautifulSoup."""
+    response = get_response(session, url)
+    if response is None:
+        return
+
+    soup = BeautifulSoup(response.text, "lxml")
+    return soup
 
 
 def find_tag(soup, tag, attrs=None):

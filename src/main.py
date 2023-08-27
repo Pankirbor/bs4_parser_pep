@@ -8,9 +8,10 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
-from constants import BASE_DIR, MAIN_DOC_URL, MAIN_PEPS_URL
+from constants import BASE_DIR, DOWNLOADS_DIR, MAIN_DOC_URL, MAIN_PEPS_URL
+from exceptions import VersionsNotFound
 from outputs import control_output
-from utils import get_response, find_tag, status_mismatch
+from utils import get_response, get_soup, find_tag, status_mismatch
 
 
 def whats_new(session):
@@ -19,11 +20,9 @@ def whats_new(session):
 
     whats_new_url = urljoin(MAIN_DOC_URL, "whatsnew/")
 
-    response = get_response(session, whats_new_url)
-    if response is None:
+    soup = get_soup(session, whats_new_url)
+    if soup is None:
         return
-
-    soup = BeautifulSoup(response.text, "lxml")
 
     main_div = find_tag(soup, "section", attrs={"id": "what-s-new-in-python"})
     div_with_ul = find_tag(main_div, "div", attrs={"class": "toctree-wrapper"})
@@ -41,11 +40,10 @@ def whats_new(session):
         href = version_a_tag["href"]
         version_link = urljoin(whats_new_url, href)
 
-        response_version = get_response(session, version_link)
-        if response_version is None:
+        soup_version = get_soup(session, version_link)
+        if soup_version is None:
             continue
 
-        soup_version = BeautifulSoup(response_version.text, "lxml")
         h1 = find_tag(soup_version, "h1")
         dl2 = find_tag(soup_version, "dl")
         name_author = dl2.text.replace("\n", " ")
@@ -58,11 +56,10 @@ def latest_versions(session):
     """Функция для получения таблицы с ссылками на
     все доступные документации Python.
     """
-    response = get_response(session, MAIN_DOC_URL)
-    if response is None:
+    soup = get_soup(session, MAIN_DOC_URL)
+    if soup is None:
         return
 
-    soup = BeautifulSoup(response.text, "lxml")
     sidebar = find_tag(soup, "div", attrs={"class": "sphinxsidebarwrapper"})
     ul_tags = sidebar.find_all("ul")
     for ul in ul_tags:
@@ -71,7 +68,9 @@ def latest_versions(session):
             break
 
     else:
-        raise Exception("Ничего не нашлось")
+        err_msg = "Список версий Python на странице не найден."
+        logging.exception(err_msg, stack_info=True)
+        raise VersionsNotFound(err_msg)
 
     pattern = r"Python (?P<version>\d\.\d+) \((?P<status>.*)\)"
     result = [
@@ -94,20 +93,19 @@ def download(session):
 
     downloads_url = urljoin(MAIN_DOC_URL, "download.html")
 
-    response = get_response(session, downloads_url)
-    if response is None:
+    soup = get_soup(session, downloads_url)
+    if soup is None:
         return
 
-    soup = BeautifulSoup(response.text, "lxml")
     table = find_tag(soup, "table")
     pdf_a4_tag = find_tag(table, "a", {"href": re.compile(r".+pdf-a4\.zip$")})
 
     archive_url = urljoin(downloads_url, pdf_a4_tag["href"])
     filename = archive_url.split("/")[-1]
 
-    downloads_dir = BASE_DIR / "downloads"
-    downloads_dir.mkdir(exist_ok=True)
-    archive_path = downloads_dir / filename
+    download_dir = BASE_DIR / DOWNLOADS_DIR
+    download_dir.mkdir(exist_ok=True)
+    archive_path = download_dir / filename
 
     response_dowanload = get_response(session, archive_url)
     if response_dowanload is None:
@@ -123,11 +121,10 @@ def pep(session):
     """Функция парсинга всех разделов PEP для подсчета
     общего количества документов и различных статусов."""
 
-    response = get_response(session, MAIN_PEPS_URL)
-    if response is None:
+    soup = get_soup(session, MAIN_PEPS_URL)
+    if soup is None:
         return
 
-    soup = BeautifulSoup(response.text, "lxml")
     table_index = find_tag(soup, "section", {"id": "numerical-index"})
 
     table_body = find_tag(table_index, "tbody")
@@ -135,17 +132,16 @@ def pep(session):
     rows_status = [find_tag(row, "abbr").text[1:] for row in table_rows]
     peps_href = [find_tag(row, "a")["href"] for row in table_rows]
 
-    count_status = defaultdict(int)
+    counts_per_status = defaultdict(int)
 
     for status, href in zip(rows_status, peps_href):
         link_pep = urljoin(MAIN_PEPS_URL, href)
 
-        response_card = get_response(session, link_pep)
-        if response_card is None:
+        soup_card = get_soup(session, link_pep)
+        if soup_card is None:
             logging.info(f"Ссылка на {link_pep} вернула None")
             continue
 
-        soup_card = BeautifulSoup(response_card.text, "lxml")
         pep_card = find_tag(soup_card, "dl")
 
         status_row_sibling = pep_card.select('dt:-soup-contains("Status")')[0]
@@ -154,10 +150,10 @@ def pep(session):
         # проверяем соответствие статусов
         status_mismatch(status_current_card, status, link_pep)
 
-        count_status[status_current_card] += 1
+        counts_per_status[status_current_card] += 1
 
-    result = [("Status", "Count")] + list(count_status.items())
-    result.append(("Total", sum(count_status.values())))
+    result = [("Status", "Count")] + list(counts_per_status.items())
+    result.append(("Total", sum(counts_per_status.values())))
     return result
 
 
