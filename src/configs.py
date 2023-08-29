@@ -7,8 +7,9 @@ from constants import (
     DT_FORMAT,
     LOGS_DIR,
     LOG_FORMAT,
-    CHOICES,
     LOG_FILE,
+    FILE,
+    PRETTY,
 )
 
 
@@ -30,7 +31,7 @@ def configure_argument_parser(available_modes):
     parser.add_argument(
         "-o",
         "--output",
-        choices=CHOICES,
+        choices=(PRETTY, FILE),
         help="Дополнительные способы вывода данных",
     )
     return parser

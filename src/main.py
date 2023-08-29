@@ -7,7 +7,13 @@ import requests_cache
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
-from constants import BASE_DIR, DOWNLOADS_DIR, MAIN_DOC_URL, MAIN_PEPS_URL
+from constants import (
+    BASE_DIR,
+    DOWNLOADS_DIR,
+    MAIN_DOC_URL,
+    MAIN_PEPS_URL,
+    EXPECTED_STATUS,
+)
 from exceptions import VersionsNotFound
 from outputs import control_output
 from utils import get_response, get_soup, find_tag, status_mismatch
@@ -147,7 +153,15 @@ def pep(session):
         status_current_card = status_row_sibling.find_next_sibling("dd").text
 
         # проверяем соответствие статусов
-        status_mismatch(status_current_card, status, link_pep)
+        mismatch = status_mismatch(status_current_card, status, link_pep)
+        if mismatch:
+            logging.info(
+                f"""Несовпадающие статусы:
+                {href}
+                Статус в карточке: {status_current_card}
+                Ожидаемые статусы: {EXPECTED_STATUS[status]}
+                """
+            )
 
         counts_per_status[status_current_card] += 1
 
@@ -180,10 +194,18 @@ def main():
         session.cache.clear()
 
     parser_mode = args.mode
-    results = MODE_TO_FUNCTION[parser_mode](session)
 
-    if results is not None:
-        control_output(results, args)
+    try:
+        results = MODE_TO_FUNCTION[parser_mode](session)
+
+        if results is not None:
+            control_output(results, args)
+
+    except Exception:
+        logging.exception(
+            "Сбой работы парсера.",
+            stack_info=True,
+        )
 
     logging.info("Парсер завершил работу.")
 

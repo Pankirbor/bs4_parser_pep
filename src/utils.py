@@ -4,7 +4,7 @@ from requests import RequestException
 from bs4 import BeautifulSoup
 
 from constants import EXPECTED_STATUS
-from exceptions import ParserFindTagException
+from exceptions import ParserFindTagException, RequestSendError
 
 
 def get_response(session, url):
@@ -17,10 +17,7 @@ def get_response(session, url):
         return response
 
     except RequestException:
-        logging.exception(
-            f"Ошибка ответа на запрос {url}",
-            stack_info=True,
-        )
+        raise RequestSendError(f"Ошибка ответа на запрос {url}")
 
 
 def get_soup(session, url):
@@ -45,14 +42,10 @@ def find_tag(soup, tag, attrs=None):
     return searched_tag
 
 
-def status_mismatch(status_current_card, status, href):
+def status_mismatch(status_current_card, status):
     """Функция для вывявления различий в статусах."""
 
     if status_current_card not in EXPECTED_STATUS[status]:
-        logging.info(
-            f"""Несовпадающие статусы:
-            {href}
-            Статус в карточке: {status_current_card}
-            Ожидаемые статусы: {EXPECTED_STATUS[status]}
-            """
-        )
+        return True
+
+    return False

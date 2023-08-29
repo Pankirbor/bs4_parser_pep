@@ -4,17 +4,23 @@ import logging
 
 from prettytable import PrettyTable
 
-from constants import BASE_DIR, DATETIME_FORMAT, RESULTS_DIR
+from constants import (
+    BASE_DIR,
+    DATETIME_FORMAT,
+    RESULTS_DIR,
+    PRETTY,
+    FILE,
+)
 
 
 def control_output(results, cli_args):
     """Функция определения способа вывода результатов работы парсера."""
 
     output = cli_args.output
-    if output == "pretty":
+    if output == PRETTY:
         pretty_output(results)
 
-    elif output == "file":
+    elif output == FILE:
         file_output(results, cli_args)
 
     else:
